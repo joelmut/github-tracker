@@ -1,0 +1,58 @@
+{
+  "name": "github-notion",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "serve": "nodemon --watch src",
+    "start": "ts-node --transpile-only src/index.ts",
+    "dev": "node --inspect=5858 -r ts-node/register -r tsconfig-paths/register src/new/index.ts",
+    "webhook:create": "node --inspect=5858 -r ts-node/register -r tsconfig-paths/register src/config/webhook.ts create",
+    "webhook:update": "node --inspect=5858 -r ts-node/register -r tsconfig-paths/register src/config/webhook.ts update",
+    "webhook:delete": "node --inspect=5858 -r ts-node/register -r tsconfig-paths/register src/config/webhook.ts delete"
+  },
+  "dependencies": {
+    "@notionhq/client": "^0.4.6",
+    "@octokit/auth-app": "^3.6.1",
+    "@octokit/auth-oauth-device": "^3.1.2",
+    "@octokit/oauth-app": "^3.6.0",
+    "@octokit/request": "^5.6.2",
+    "@octokit/webhooks": "^9.17.0",
+    "@types/conf": "^3.0.0",
+    "azure-devops-node-api": "^11.1.1",
+    "conf": "^10.1.1",
+    "configstore": "^6.0.0",
+    "croner": "^4.1.96",
+    "dot-prop": "^6.0.1",
+    "dotenv": "^10.0.0",
+    "extract-values": "^0.1.2",
+    "mitt": "^3.0.0",
+    "ms": "^2.1.3",
+    "nconf": "^0.11.3",
+    "ramda": "^0.27.1",
+    "ts-toolbelt": "^9.6.0",
+    "yup": "^0.32.11",
+    "zod": "^3.12.0"
+  },
+  "devDependencies": {
+    "@types/configstore": "^5.0.1",
+    "@types/ms": "^0.7.31",
+    "@types/nconf": "^0.10.1",
+    "@types/node": "^16.11.7",
+    "@types/ramda": "^0.28.0",
+    "nodemon": "^2.0.15",
+    "ts-node": "^10.4.0",
+    "tsconfig-paths": "^3.11.0",
+    "typescript": "^4.4.4"
+  },
+  "nodemonConfig": {
+    "ignore": [
+      "**/*.test.ts",
+      "**/*.spec.ts",
+      ".git",
+      "node_modules"
+    ],
+    "exec": "npm run dev",
+    "ext": "ts"
+  }
+}

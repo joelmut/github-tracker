@@ -1,0 +1,6 @@
+// {
+//   "explorer.experimental.fileNesting.enabled": true,
+//   "explorer.experimental.fileNesting.patterns": {
+//     "package.json": "yarn.lock, package-lock.json"
+//   }
+// }

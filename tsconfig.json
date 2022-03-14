@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "es6",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "resolveJsonModule": true,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "strictNullChecks": true,
+    "strictFunctionTypes": false
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".", "types.d.ts"],
+  "exclude": ["node_modules", ".vscode"]
+}
