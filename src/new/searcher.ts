@@ -64,6 +64,7 @@ export class Searcher implements ISubscription {
   private subscriptions = new EventEmitter();
   private state = new Map();
   private repos = new Map<string, Repository>();
+  private prevDate: Date;
 
   constructor(options: PartialOptional<ISearcherOptions, "keys" | "startAt">) {
     this.options = optionsSchema.validateSync(options);
@@ -77,6 +78,7 @@ export class Searcher implements ISubscription {
         authorization: `token ${this.options.token}`,
       },
     });
+    this.prevDate = this.options.startAt;
   }
 
   subscribe<T extends Events>(options: ISubscribeOptions<T>): ISubscribeResult;
@@ -107,8 +109,8 @@ export class Searcher implements ISubscription {
     options.events.forEach((e) => this.subscriptions.on(e, options.listen));
 
     if (this.status === Status.Idle) {
-      this.scheduler.schedule(this.onSchedule.bind(this));
       this.status = Status.Started;
+      this.scheduler.schedule(this.onSchedule.bind(this));
     }
 
     return {
@@ -118,7 +120,8 @@ export class Searcher implements ISubscription {
   }
 
   private async onSchedule() {
-    const date = this.scheduler.previous() ?? this.options.startAt;
+    this.prevDate = this.scheduler.previous() ?? this.prevDate;
+    console.log(`Previous run: ${this.prevDate.toISOString()}`);
 
     if (!this.repos.size) {
       const repos = await this.repositories();
@@ -128,7 +131,7 @@ export class Searcher implements ISubscription {
       });
     }
 
-    this.queries(date).forEach(async (query) => {
+    this.queries(this.prevDate).forEach(async (query) => {
       const response = await this.search(query);
       let issues = response.map((issue) => {
         const name = issue.repository_url.replace(
@@ -181,13 +184,22 @@ export class Searcher implements ISubscription {
 
     switch (event) {
       case Events.IssuesUpdated:
-        const created = payload.filter(
-          (e) => e.state === IssueState.Open && e.createdAt === e.updatedAt
+        const { created, updated, closed } = payload.reduce(
+          (acc, val) => {
+            const key =
+              val.state === IssueState.Closed
+                ? "closed"
+                : val.state === IssueState.Open
+                ? val.createdAt === val.updatedAt ||
+                  val.createdAt >= this.prevDate.toISOString()
+                  ? "created"
+                  : "updated"
+                : "closed";
+            acc[key].push(val);
+            return acc;
+          },
+          { created: [], updated: [], closed: [] }
         );
-        const updated = payload.filter(
-          (e) => e.state === IssueState.Open && e.createdAt < e.updatedAt
-        );
-        const closed = payload.filter((e) => e.state === IssueState.Closed);
 
         return [
           [Events.IssuesCreated, created],
@@ -287,41 +299,6 @@ export class Searcher implements ISubscription {
     return Promise.all(result);
   }
 }
-
-// const parse = {
-//   repository(repository: ResponseRepository): Repository {
-//     return {
-//       owner: repository.owner.login,
-//       name: repository.name,
-//       fullname: repository.full_name,
-//       url: repository.html_url,
-//       source: repository.source
-//         ? parse.repository(repository.source as ResponseRepository)
-//         : undefined,
-//     };
-//   },
-//   issue(issue: ResponseIssue, repository: Repository): Issue {
-//     return {
-//       id: issue.id.toString(),
-//       type: issue.pull_request ? IssueType.pull : IssueType.issue,
-//       state: issue.state.toLowerCase() as IssueState,
-//       number: issue.number,
-//       title: issue.title,
-//       url: issue.html_url,
-//       createdAt: issue.created_at,
-//       updatedAt: issue.updated_at,
-//       author: { name: issue.user?.login!, url: issue.user?.html_url! },
-//       assignees:
-//         issue.assignees?.map((e) => ({
-//           name: e.login,
-//           url: e.html_url,
-//         })) ?? [],
-//       labels: issue.labels.map((e) => e.name!),
-//       repository,
-//       raw: issue,
-//     };
-//   },
-// };
 
 type ResponseItems<Path extends "/search/issues"> =
   paths[Path]["get"]["responses"][200]["content"]["application/json"]["items"] extends Array<

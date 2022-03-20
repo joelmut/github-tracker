@@ -7,117 +7,96 @@ import { Semaphore } from "./semaphore";
 import { IssueType } from "src/core/interfaces";
 import { DevOps } from "./devops";
 
-const semaphore = new Semaphore<Events>(1);
-const notion = new Notion(config.notion);
-const devops = new DevOps(config.devops);
+main();
 
-const listener = new Listener({
-  token: config.github.token,
-  users: config.github.listeners,
-  repos: config.github.repos.realtime,
-});
-const searcher = new Searcher({
-  // schedule: "*/20 * * * * *",
-  schedule: config.github.schedule,
-  token: config.github.token,
-  users: config.github.listeners,
-  repos: config.github.repos.poolinterval,
-});
+async function main() {
+  const semaphore = new Semaphore<Events>(1);
+  const notion = new Notion(config.notion);
+  const devops = new DevOps(config.devops);
 
-const subscribe = register([listener, searcher]);
+  const listener = new Listener({
+    token: config.github.token,
+    users: config.github.listeners,
+    repos: config.github.repos.realtime,
+  });
 
-subscribe({
-  events: [Events.IssuesCreated],
-  listen(event, payload) {
-    payload.map(async (issue) => {
-      const { release, context } = await semaphore.acquire(issue.url);
-      if (context === Events.IssuesUpdated) {
-        await notion.update({
-          data: issue,
-          where: {
-            repository: issue.repository.fullname,
-            number: issue.number,
-          },
-        });
-        return release(context);
-      }
+  const startAt = new Date("2022-03-19T19:00:00.000Z");
 
-      await notion.create({
-        data: issue,
+  const searcher = new Searcher({
+    // schedule: "*/10 * * * * *",
+    schedule: config.github.schedule,
+    token: config.github.token,
+    users: config.github.listeners,
+    repos: config.github.repos.poolinterval,
+    startAt,
+  });
+
+  await notion.load();
+
+  const subscribe = register([listener, searcher]);
+
+  subscribe({
+    events: [Events.IssuesCreated],
+    listen(event, payload) {
+      payload.map(async (issue) => {
+        const { release } = await semaphore.acquire(issue.url);
+        await notion.sync(issue);
+        release();
+
+        if (issue.type === IssueType.issue) {
+          await devops.create({ data: issue });
+        }
       });
-      release(Events.IssuesCreated);
+    },
+  });
 
-      if (issue.type === IssueType.issue) {
-        await devops.create({ data: issue });
-      }
-    });
-  },
-});
-
-subscribe({
-  events: [Events.IssuesUpdated, Events.IssuesClosed],
-  async listen(event, payload) {
-    payload.map(async (issue) => {
-      const { release } = await semaphore.acquire(issue.url);
-      await notion.update({
-        data: issue,
-        where: {
-          repository: issue.repository.fullname,
-          number: issue.number,
-        },
+  subscribe({
+    events: [Events.IssuesUpdated, Events.IssuesClosed],
+    async listen(event, payload) {
+      payload.map(async (issue) => {
+        const { release, context } = await semaphore.acquire(issue.url);
+        await notion.sync(issue);
+        release();
       });
-      release(Events.IssuesUpdated);
-    });
-  },
-});
+    },
+  });
 
-subscribe({
-  events: [Events.IssuesPromoted],
-  async listen(event, payload) {
-    const notionIssues = await notion.findMany({
-      where: payload.map((issue) => ({
-        repository: issue.repository.source?.fullname!,
-        number: issue.promoted?.number!,
-      })),
-    });
+  subscribe({
+    events: [Events.IssuesPromoted],
+    async listen(event, payload) {
+      payload.map(async (issue) => {
+        const { release } = await semaphore.acquire(issue.promoted?.url);
 
-    payload.map(async (issue) => {
-      const { release } = await semaphore.acquire(issue.promoted?.url);
-
-      const created = notionIssues?.find(
-        (e) =>
-          e.repository?.fullname === issue.repository.source?.fullname &&
-          e.number === issue.promoted?.number
-      )!;
-
-      if (created) {
-        await notion.delete({
+        const si = notion.findUnique({
           where: {
             repository: issue.repository.source?.fullname!,
             number: issue.promoted?.number!,
           },
         });
-      }
 
-      await notion.update({
-        data: {
-          type: IssueType.issue,
+        const data = {
+          ...issue,
           state: IssueState.Open,
-          title: issue.title,
-          repository: issue.repository.source!,
-          ...issue.promoted,
-          ...created,
+          number: issue.promoted?.number,
+          repository: issue.repository.source,
+          url: issue.promoted?.url,
+          ...si,
           promoted: {
+            number: issue.number,
             url: issue.url,
           },
-        },
-        where: {
+        };
+
+        await notion.sync(data);
+        release();
+
+        // Remove fork issue
+        const where = {
           repository: issue.repository.fullname,
           number: issue.number,
-        },
+        };
+        await notion.delete({ where });
       });
-
-      release(Events.IssuesUpdated);
-    });
-  },
-});
+    },
+  });
+}

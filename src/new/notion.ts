@@ -1,6 +1,6 @@
 import { Client } from "@notionhq/client/build/src";
 import type { GetPageResponse } from "@notionhq/client/build/src/api-endpoints";
-import { DeepPartial, Issue, IssueState, Repository } from "./shared";
+import { Issue, IssueState, Repository } from "./shared";
 import { intersperse } from "ramda";
 import { IssueType } from "src/core/interfaces";
 
@@ -14,11 +14,15 @@ interface ICreate {
 }
 
 interface IUpdate {
-  data: DeepPartial<Issue>;
+  data: Issue;
   where: IWhere;
 }
 
 interface IDelete {
+  where: IWhere;
+}
+
+interface IFindUnique {
   where: IWhere;
 }
 
@@ -31,10 +35,15 @@ interface IWhere {
   repository: string;
 }
 
+interface PageInfo {
+  pageId: string;
+}
+
 export class Notion {
   private options: INotionOptions;
   private client: Client;
   private utils: NotionUtils;
+  private issues: Issue[];
 
   constructor(options: INotionOptions) {
     this.options = options;
@@ -42,50 +51,87 @@ export class Notion {
     this.utils = new NotionUtils({ ...options, client: this.client });
   }
 
-  async create(options: ICreate): Promise<boolean> {
+  async load(): Promise<Issue[]> {
+    const pages = await this.utils.getPages();
+    if (!pages?.length) return [];
+
+    return (this.issues = pages
+      .map((e) => e.properties as NotionIssue)
+      .map(this.utils.fromPage));
+  }
+
+  async create(options: ICreate): Promise<Issue> {
     const result = await this.client.pages.create({
       parent: { database_id: this.options.database },
       properties: this.utils.toPage(options.data),
     });
-    return !!result?.id;
+    const issue = this.utils.fromPage(result.properties as NotionIssue);
+    this.issues.push(issue);
+
+    return issue;
   }
 
-  async update(options: IUpdate): Promise<boolean> {
+  async update(options: IUpdate): Promise<Issue> {
     const page = await this.utils.getPage(options.where);
-    if (!page) return false;
+    if (!page) return;
 
-    const issue = this.utils.fromPage(page.properties as NotionIssue);
+    const pi = this.utils.fromPage(page.properties as NotionIssue);
 
     // Maintain the promoted link from the page, otherwise it will be discarted.
     const data = {
       ...options.data,
-      promoted: issue.promoted,
-    } as Issue;
+      promoted: pi.promoted?.url ? pi.promoted : options.data.promoted,
+    };
 
     const result = await this.client.pages.update({
       page_id: page.id,
       properties: this.utils.toPage(data),
     });
-    return !!result?.id;
+
+    const issue = this.utils.fromPage(result.properties as NotionIssue);
+
+    const index = this.issues.findIndex(this.utils.getId(options.where));
+    if (index >= 0) {
+      this.issues[index] = issue;
+    }
+
+    return issue;
   }
 
-  async delete(options: IDelete): Promise<boolean> {
+  async delete(options: IDelete): Promise<Issue> {
     const page = await this.utils.getPage(options.where);
-    if (!page) return false;
+    if (!page) return;
 
-    const result = await this.client.blocks.delete({ block_id: page.id });
-    return !!result?.id;
+    await this.client.blocks.delete({ block_id: page.id });
+
+    const index = this.issues.findIndex(this.utils.getId(options.where));
+    const issue = this.issues[index];
+    this.issues = this.issues.filter((_, i) => i !== index);
+
+    return issue;
   }
 
-  async findMany(
-    options: IFindMany
-  ): Promise<DeepPartial<Issue>[] | undefined> {
-    const pages = await this.utils.getPages(options.where);
-    if (!pages?.length) return;
+  findUnique(options: IFindUnique): Issue {
+    return this.issues.find(this.utils.getId(options.where));
+  }
 
-    return pages
-      .map((e) => e.properties as NotionIssue)
-      .map(this.utils.fromPage);
+  findMany(options?: IFindMany): Issue[] {
+    if (!options) return this.issues;
+
+    return this.issues.filter((e) =>
+      options.where.some((x) => this.utils.getId(x)(e))
+    );
+  }
+
+  async sync(issue: Issue): Promise<void> {
+    const where: IWhere = {
+      repository: issue.repository.fullname,
+      number: issue.number,
+    };
+
+    this.findUnique({ where })
+      ? await this.update({ data: issue, where })
+      : await this.create({ data: issue });
   }
 }
 
@@ -102,6 +148,7 @@ type NotionIssue = {
   Assignees: Field<"rich_text">;
   Labels: Field<"multi_select">;
   Links: Field<"rich_text">;
+  Raw: Field<"rich_text">;
 };
 
 interface INotionUtilsOptions extends INotionOptions {
@@ -115,17 +162,10 @@ class NotionUtils {
     this.options = options;
   }
 
-  getFilters(where: IWhere) {
-    return [
-      {
-        property: "Repository",
-        select: { equals: where.repository },
-      },
-      {
-        property: "Number",
-        number: { equals: where.number },
-      },
-    ];
+  getId(where: IWhere) {
+    return (issue: Issue) =>
+      issue.repository?.fullname === where.repository &&
+      issue.number === where.number;
   }
 
   async getPage(where: IWhere): Promise<GetPageResponse> {
@@ -139,16 +179,19 @@ class NotionUtils {
     return page;
   }
 
-  async getPages(where: IWhere[]): Promise<GetPageResponse[]> {
+  async getPages(where?: IWhere[]): Promise<GetPageResponse[]> {
     const fetch = async (cursor?) => {
+      const filter = where
+        ? {
+            or: where.map((e) => ({ and: this.getFilters(e) })),
+          }
+        : undefined;
       const { has_more, next_cursor, results } =
         await this.options.client.databases.query({
           database_id: this.options.database,
           page_size: 100,
           start_cursor: cursor,
-          filter: {
-            or: where.map((e) => ({ and: this.getFilters(e) })),
-          },
+          filter,
         });
 
       if (has_more) {
@@ -161,7 +204,7 @@ class NotionUtils {
     return fetch();
   }
 
-  toPage(issue: DeepPartial<Issue>): NotionIssue {
+  toPage(issue: Issue): NotionIssue {
     const properties = {
       Type: {
         select: { name: issue.type },
@@ -185,7 +228,7 @@ class NotionUtils {
         rich_text: issue.url
           ? [
               {
-                text: { content: "source", link: { url: issue.url } },
+                text: { content: "source", link: { url: issue.url ?? "" } },
               },
             ]
           : [],
@@ -210,46 +253,38 @@ class NotionUtils {
             ]
           : [],
       },
-    } as DeepPartial<NotionIssue>;
+      Raw: {
+        rich_text: [{ text: { content: JSON.stringify(issue) } }],
+      },
+    } as NotionIssue;
 
-    if (issue.promoted) {
+    if (issue.promoted?.url) {
       properties.Links?.rich_text?.push(
-        { text: { content: "\n" } },
+        { text: { content: "\n" } } as any,
         {
           text: { content: "promoted", link: { url: issue.promoted.url } },
-        }
+        } as any
       );
     }
 
     return properties as NotionIssue;
   }
 
-  fromPage(page: NotionIssue): DeepPartial<Issue> {
-    return {
-      type: page.Type.select?.name! as IssueType,
-      state: page.State.select?.name! as IssueState,
-      number: page.Number.number!,
-      title: page.Title.title[0].plain_text,
-      repository: {
-        fullname: page.Repository.select?.name!,
+  fromPage(page: NotionIssue): Issue {
+    const raw = page.Raw.rich_text[0]?.plain_text;
+    return raw ? JSON.parse(raw) : {};
+  }
+
+  private getFilters(where: IWhere) {
+    return [
+      {
+        property: "Repository",
+        select: { equals: where.repository },
       },
-      author: page.Author.rich_text.map((e: any) => ({
-        name: e.text.content,
-        url: e.text.link?.url,
-      }))[0],
-      assignees: page.Assignees.rich_text.map((e: any) => ({
-        name: e.text.content,
-        url: e.text.link?.url,
-      })),
-      labels: page.Labels.multi_select.map((e) => e.name),
-      url: page.Links.rich_text
-        .filter((e: any) => e.text.content === "source")
-        .map((e: any) => e.text.link?.url)[0],
-      promoted: {
-        url: page.Links.rich_text
-          .filter((e: any) => e.text.content === "promoted")
-          .map((e: any) => e.text.link?.url)[0],
+      {
+        property: "Number",
+        number: { equals: where.number },
       },
-    };
+    ];
   }
 }

@@ -11,7 +11,7 @@
     "resolveJsonModule": true,
     "sourceMap": true,
     "baseUrl": ".",
-    "strictNullChecks": true,
+    "strictNullChecks": false,
     "strictFunctionTypes": false
   },
   "include": ["**/*.ts", "**/*.tsx", ".", "types.d.ts"],

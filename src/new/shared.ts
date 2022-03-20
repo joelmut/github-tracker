@@ -51,7 +51,7 @@ export interface Issue {
   repository: Repository;
   promoted?: Pick<Issue, "number" | "url">;
   description: string;
-  raw: any;
+  raw?: any;
 }
 
 export enum IssueState {
